@@ -288,3 +288,178 @@ public class ParentService {
 4. **Controller**: Expose endpoints to fetch non-deleted entities and perform soft deletes.
 
 This structure provides a clean and reusable approach to handle soft delete functionality with cascading behavior in Spring Boot using JPA.
+
+
+////////////
+
+this approach will work for entities with orphanRemoval = true. The orphanRemoval attribute is used to automatically remove child entities when they are no longer referenced by their parent. However, since we're implementing a soft delete (marking entities as deleted rather than actually removing them), we need to ensure that child entities are also marked as deleted when their parent is soft deleted.
+
+Here's how you can achieve this:
+
+Entities: Ensure that the deleted field is present and properly mapped.
+Repository Methods: Use @Query annotations to exclude deleted entities.
+Service Layer: Implement the soft delete logic to handle the deleted field and cascade the soft delete to child entities.
+Example
+1. Entity Definitions
+Parent Entity:
+
+java
+Copy code
+import javax.persistence.*;
+import java.util.List;
+
+@Entity
+public class Parent {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    private String name;
+
+    private boolean deleted = false;
+
+    @OneToMany(mappedBy = "parent", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<Child> children;
+
+    // Getters and setters
+}
+Child Entity:
+
+java
+Copy code
+import javax.persistence.*;
+
+@Entity
+public class Child {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    private String name;
+
+    private boolean deleted = false;
+
+    @ManyToOne
+    @JoinColumn(name = "parent_id")
+    private Parent parent;
+
+    // Getters and setters
+}
+2. Repository Interfaces
+Parent Repository:
+
+java
+Copy code
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+import java.util.Optional;
+
+@Repository
+public interface ParentRepository extends JpaRepository<Parent, Long> {
+    
+    @Query("SELECT p FROM Parent p WHERE p.deleted = false")
+    List<Parent> findAllByDeletedFalse();
+
+    @Query("SELECT p FROM Parent p WHERE p.id = :id AND p.deleted = false")
+    Optional<Parent> findByIdAndDeletedFalse(Long id);
+}
+Child Repository:
+
+java
+Copy code
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+import java.util.Optional;
+
+@Repository
+public interface ChildRepository extends JpaRepository<Child, Long> {
+    
+    @Query("SELECT c FROM Child c WHERE c.deleted = false")
+    List<Child> findAllByDeletedFalse();
+
+    @Query("SELECT c FROM Child c WHERE c.id = :id AND c.deleted = false")
+    Optional<Child> findByIdAndDeletedFalse(Long id);
+
+    @Query("SELECT c FROM Child c WHERE c.parent.id = :parentId AND c.deleted = false")
+    List<Child> findAllByParentIdAndDeletedFalse(Long parentId);
+}
+3. Service Layer
+Parent Service:
+
+java
+Copy code
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
+import java.util.Optional;
+
+@Service
+public class ParentService {
+
+    @Autowired
+    private ParentRepository parentRepository;
+
+    @Autowired
+    private ChildRepository childRepository;
+
+    @Transactional
+    public void softDeleteParent(Long parentId) {
+        Optional<Parent> parentOptional = parentRepository.findById(parentId);
+        if (parentOptional.isPresent()) {
+            Parent parent = parentOptional.get();
+            parent.setDeleted(true);
+            parent.getChildren().forEach(child -> child.setDeleted(true));
+            parentRepository.save(parent);
+        }
+    }
+
+    public List<Parent> findAllActiveParents() {
+        return parentRepository.findAllByDeletedFalse();
+    }
+
+    public Optional<Parent> findActiveParentById(Long id) {
+        return parentRepository.findByIdAndDeletedFalse(id);
+    }
+}
+Child Service (Optional):
+
+java
+Copy code
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
+import java.util.Optional;
+
+@Service
+public class ChildService {
+
+    @Autowired
+    private ChildRepository childRepository;
+
+    public List<Child> findAllActiveChildren() {
+        return childRepository.findAllByDeletedFalse();
+    }
+
+    public Optional<Child> findActiveChildById(Long id) {
+        return childRepository.findByIdAndDeletedFalse(id);
+    }
+
+    public List<Child> findActiveChildrenByParentId(Long parentId) {
+        return childRepository.findAllByParentIdAndDeletedFalse(parentId);
+    }
+}
+Summary
+Entities: Ensure the deleted field is present.
+Repository Methods: Use @Query annotations to filter out deleted entities.
+Service Layer: Implement the soft delete logic to handle the deleted field and cascade the soft delete to child entities.
+This approach ensures that when you soft delete a parent entity, all its child entities are also soft deleted, and the orphanRemoval feature will work correctly by marking the children as deleted without physically removing them from the database.
