@@ -415,3 +415,209 @@ public class SecurityConfig {
         return new JwtAuthenticationFilter();
     }
 }
+
+
++++++++++++++++++++++++++
+
+The provided RequestDecryptionFilter and ResponseEncryptionFilter need slight adjustments to ensure that all requests are decrypted and all responses are encrypted. Let's refine these filters to ensure they work correctly and are applied to all requests and responses.
+
+Adjusting RequestDecryptionFilter and ResponseEncryptionFilter
+Here are the refined versions of the filters:
+
+RequestDecryptionFilter
+This filter will decrypt the request body if the Encrypted-Payload and AES-Key headers are present.
+
+java
+Copy code
+import javax.servlet.*;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletRequestWrapper;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+
+public class RequestDecryptionFilter implements Filter {
+
+    @Override
+    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) throws IOException, ServletException {
+        HttpServletRequest httpRequest = (HttpServletRequest) request;
+        String encryptedPayload = httpRequest.getHeader("Encrypted-Payload");
+        String aesKey = httpRequest.getHeader("AES-Key");
+
+        if (encryptedPayload != null && aesKey != null) {
+            try {
+                String decryptedPayload = AESEncryptionUtil.decrypt(encryptedPayload, aesKey);
+                HttpServletRequestWrapper requestWrapper = new HttpServletRequestWrapper(httpRequest) {
+                    @Override
+                    public ServletInputStream getInputStream() throws IOException {
+                        final byte[] bytes = decryptedPayload.getBytes(StandardCharsets.UTF_8);
+                        return new ServletInputStream() {
+                            private int lastIndexRetrieved = -1;
+                            private ReadListener readListener = null;
+
+                            @Override
+                            public boolean isFinished() {
+                                return (lastIndexRetrieved == bytes.length - 1);
+                            }
+
+                            @Override
+                            public boolean isReady() {
+                                return isFinished();
+                            }
+
+                            @Override
+                            public void setReadListener(ReadListener readListener) {
+                                this.readListener = readListener;
+                                if (!isFinished()) {
+                                    try {
+                                        readListener.onDataAvailable();
+                                    } catch (IOException e) {
+                                        readListener.onError(e);
+                                    }
+                                } else {
+                                    try {
+                                        readListener.onAllDataRead();
+                                    } catch (IOException e) {
+                                        readListener.onError(e);
+                                    }
+                                }
+                            }
+
+                            @Override
+                            public int read() throws IOException {
+                                int i;
+                                if (!isFinished()) {
+                                    i = bytes[lastIndexRetrieved + 1];
+                                    lastIndexRetrieved++;
+                                    if (isFinished() && (readListener != null)) {
+                                        try {
+                                            readListener.onAllDataRead();
+                                        } catch (IOException ex) {
+                                            readListener.onError(ex);
+                                            throw ex;
+                                        }
+                                    }
+                                    return i;
+                                } else {
+                                    return -1;
+                                }
+                            }
+                        };
+                    }
+
+                    @Override
+                    public BufferedReader getReader() throws IOException {
+                        return new BufferedReader(new InputStreamReader(this.getInputStream()));
+                    }
+                };
+
+                chain.doFilter(requestWrapper, response);
+            } catch (Exception e) {
+                throw new ServletException("Decryption failed", e);
+            }
+        } else {
+            chain.doFilter(request, response);
+        }
+    }
+
+    @Override
+    public void init(FilterConfig filterConfig) throws ServletException {}
+
+    @Override
+    public void destroy() {}
+}
+ResponseEncryptionFilter
+This filter will encrypt the response body using the AES algorithm.
+
+java
+Copy code
+import javax.servlet.*;
+import javax.servlet.http.HttpServletResponse;
+import java.io.CharArrayWriter;
+import java.io.IOException;
+import java.io.PrintWriter;
+
+public class ResponseEncryptionFilter implements Filter {
+
+    @Override
+    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) throws IOException, ServletException {
+        HttpServletResponse httpServletResponse = (HttpServletResponse) response;
+        CharResponseWrapper responseWrapper = new CharResponseWrapper(httpServletResponse);
+
+        chain.doFilter(request, responseWrapper);
+
+        String key = "AES Key"; // Retrieve your actual key, e.g., from the request or a shared secret
+
+        try {
+            String encryptedPayload = AESEncryptionUtil.encrypt(responseWrapper.toString(), key);
+            httpServletResponse.setHeader("Encrypted-Payload", encryptedPayload);
+            httpServletResponse.setHeader("AES-Key", key);
+            httpServletResponse.getOutputStream().write(encryptedPayload.getBytes());
+        } catch (Exception e) {
+            throw new ServletException("Encryption failed", e);
+        }
+    }
+
+    @Override
+    public void init(FilterConfig filterConfig) throws ServletException {}
+
+    @Override
+    public void destroy() {}
+
+    private static class CharResponseWrapper extends HttpServletResponseWrapper {
+        private final CharArrayWriter charWriter = new CharArrayWriter();
+
+        public CharResponseWrapper(HttpServletResponse response) {
+            super(response);
+        }
+
+        @Override
+        public PrintWriter getWriter() {
+            return new PrintWriter(charWriter);
+        }
+
+        @Override
+        public String toString() {
+            return charWriter.toString();
+        }
+    }
+}
+Registering the Filters
+Ensure the filters are registered correctly in your security configuration:
+
+java
+Copy code
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+
+@Configuration
+@EnableWebSecurity
+public class SecurityConfig {
+
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        http.csrf().disable()
+            .sessionManagement().sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+            .and()
+            .authorizeRequests()
+            .antMatchers("/api/auth/**").permitAll()
+            .anyRequest().authenticated()
+            .and()
+            .addFilterBefore(new RequestDecryptionFilter(), UsernamePasswordAuthenticationFilter.class)
+            .addFilterAfter(new ResponseEncryptionFilter(), RequestDecryptionFilter.class)
+            .addFilterBefore(jwtAuthenticationFilter(), UsernamePasswordAuthenticationFilter.class);
+
+        return http.build();
+    }
+
+    @Bean
+    public JwtAuthenticationFilter jwtAuthenticationFilter() {
+        return new JwtAuthenticationFilter();
+    }
+}
