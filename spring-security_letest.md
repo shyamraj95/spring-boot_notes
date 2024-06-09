@@ -1162,3 +1162,169 @@ This code completes the setup for Spring Boot with JWT-based authentication, rol
 **Next steps:**
 **a.** Add unit tests to ensure the code works as expected.
 **b.** Test the filters and encryption/decryption processes in a secure and isolated environment.
+
+
+
+
+
+
++++++++++++++++++++++++++++___________________________________________+++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+Certainly! Configuring environment variables to store sensitive information such as RSA keys ensures that these values are not hard-coded in your application code, enhancing security. Here’s a step-by-step guide to setting up and using environment variables to store your RSA key pair in a Spring Boot application:
+
+### Step 1: Configure Environment Variables
+
+1. **Set Environment Variables**:
+   - Define environment variables for your RSA keys. This can be done in different ways depending on your operating system and deployment environment.
+
+   **On Unix-based systems (Linux, macOS)**:
+   ```sh
+   export RSA_PRIVATE_KEY="<Your-Encrypted-Private-Key-Here>"
+   export RSA_PUBLIC_KEY="<Your-Public-Key-Here>"
+   ```
+
+   **On Windows**:
+   ```cmd
+   set RSA_PRIVATE_KEY=<Your-Encrypted-Private-Key-Here>
+   set RSA_PUBLIC_KEY=<Your-Public-Key-Here>
+   ```
+
+   **In a `.env` file (useful for development)**:
+   ```plaintext
+   RSA_PRIVATE_KEY=<Your-Encrypted-Private-Key-Here>
+   RSA_PUBLIC_KEY=<Your-Public-Key-Here>
+   ```
+
+2. **Load Environment Variables in Spring Boot**:
+   - Spring Boot automatically loads environment variables, making them accessible through the `@Value` annotation or `Environment` object.
+
+### Step 2: Access Environment Variables in Spring Boot
+
+1. **Using `@Value` Annotation**:
+   - Use the `@Value` annotation to inject the values of the environment variables into your Spring Boot components.
+
+   ```java
+   import org.springframework.beans.factory.annotation.Value;
+   import org.springframework.stereotype.Component;
+
+   @Component
+   public class KeyConfig {
+
+       @Value("${RSA_PRIVATE_KEY}")
+       private String privateKey;
+
+       @Value("${RSA_PUBLIC_KEY}")
+       private String publicKey;
+
+       public String getPrivateKey() {
+           return privateKey;
+       }
+
+       public String getPublicKey() {
+           return publicKey;
+       }
+   }
+   ```
+
+2. **Using `Environment` Object**:
+   - Alternatively, you can use the `Environment` object to access environment variables.
+
+   ```java
+   import org.springframework.beans.factory.annotation.Autowired;
+   import org.springframework.core.env.Environment;
+   import org.springframework.stereotype.Component;
+
+   @Component
+   public class KeyConfig {
+
+       private final Environment env;
+
+       @Autowired
+       public KeyConfig(Environment env) {
+           this.env = env;
+       }
+
+       public String getPrivateKey() {
+           return env.getProperty("RSA_PRIVATE_KEY");
+       }
+
+       public String getPublicKey() {
+           return env.getProperty("RSA_PUBLIC_KEY");
+       }
+   }
+   ```
+
+### Step 3: Use RSA Keys in Your Application
+
+1. **Decrypt the Private Key**:
+   - If your private key is stored in an encrypted form, you will need to decrypt it before use. Here’s an example of how you might decrypt and use the private key:
+
+   ```java
+   import javax.crypto.Cipher;
+   import java.security.KeyFactory;
+   import java.security.PrivateKey;
+   import java.security.PublicKey;
+   import java.security.spec.PKCS8EncodedKeySpec;
+   import java.security.spec.X509EncodedKeySpec;
+   import java.util.Base64;
+
+   @Component
+   public class RSAEncryptionUtil {
+
+       private final KeyConfig keyConfig;
+
+       @Autowired
+       public RSAEncryptionUtil(KeyConfig keyConfig) {
+           this.keyConfig = keyConfig;
+       }
+
+       public PrivateKey getPrivateKey() throws Exception {
+           String privateKeyPEM = keyConfig.getPrivateKey();
+           byte[] encoded = Base64.getDecoder().decode(privateKeyPEM);
+           PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(encoded);
+           KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+           return keyFactory.generatePrivate(keySpec);
+       }
+
+       public PublicKey getPublicKey() throws Exception {
+           String publicKeyPEM = keyConfig.getPublicKey();
+           byte[] encoded = Base64.getDecoder().decode(publicKeyPEM);
+           X509EncodedKeySpec keySpec = new X509EncodedKeySpec(encoded);
+           KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+           return keyFactory.generatePublic(keySpec);
+       }
+
+       public byte[] encrypt(String data, PublicKey publicKey) throws Exception {
+           Cipher cipher = Cipher.getInstance("RSA");
+           cipher.init(Cipher.ENCRYPT_MODE, publicKey);
+           return cipher.doFinal(data.getBytes());
+       }
+
+       public String decrypt(byte[] data, PrivateKey privateKey) throws Exception {
+           Cipher cipher = Cipher.getInstance("RSA");
+           cipher.init(Cipher.DECRYPT_MODE, privateKey);
+           return new String(cipher.doFinal(data));
+       }
+   }
+   ```
+
+2. **Encrypt and Decrypt Data**:
+   - Use the `RSAEncryptionUtil` to encrypt and decrypt API payloads.
+
+   **Encrypting Data**:
+   ```java
+   String dataToEncrypt = "Sensitive Data";
+   PublicKey publicKey = rsaEncryptionUtil.getPublicKey();
+   byte[] encryptedData = rsaEncryptionUtil.encrypt(dataToEncrypt, publicKey);
+   ```
+
+   **Decrypting Data**:
+   ```java
+   byte[] dataToDecrypt = ...; // data received from the client
+   PrivateKey privateKey = rsaEncryptionUtil.getPrivateKey();
+   String decryptedData = rsaEncryptionUtil.decrypt(dataToDecrypt, privateKey);
+   ```
+
+By following these steps, you ensure that your RSA keys are securely stored and used within your Spring Boot application.
+
