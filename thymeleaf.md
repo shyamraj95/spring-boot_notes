@@ -1,4 +1,3 @@
-Let's refine the implementation based on the provided wireframe and ensure that the main parent tab file uses Bootstrap for navigation. We'll also add exception handling in our Spring Boot application.
 
 ### Step 1: Add Bootstrap to the Project
 
