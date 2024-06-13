@@ -318,4 +318,73 @@ spring.datasource.password=password
 spring.jpa.database-platform=org.hibernate.dialect.H2Dialect
 spring.h2.console.enabled=true
 ```
+*********************************************-------------------------------------***********************************************************
 
+
+
+
+ <div  class="col-sm-6">
+        <h3>Left Tabs</h3>
+        <hr/>
+        <div class="col-xs-3"> <!-- required for floating -->
+          <!-- Nav tabs -->
+          <ul class="nav nav-tabs tabs-left sideways">
+            <li class="active"><a href="#home-v" data-toggle="tab">Home</a></li>
+            <li><a href="#profile-v" data-toggle="tab">Profile</a></li>
+            <li><a href="#messages-v" data-toggle="tab">Messages</a></li>
+            <li><a href="#settings-v" data-toggle="tab">Settings</a></li>
+          </ul>
+        </div>
+
+        <div class="col-xs-9">
+          <!-- Tab panes -->
+          <div class="tab-content">
+            <div class="tab-pane active" id="home-v">Home Tab.</div>
+            <div class="tab-pane" id="profile-v">Profile Tab.</div>
+            <div class="tab-pane" id="messages-v">Messages Tab.</div>
+            <div class="tab-pane" id="settings-v">Settings Tab.</div>
+          </div>
+        </div>
+
+        <div class="clearfix"></div>
+
+      </div>
+
+
+      .tabs-left {
+  border-bottom: none;
+  border-right: 1px solid #ddd;
+}
+
+.tabs-left>li {
+  float: none;
+ margin:0px;
+  
+}
+
+.tabs-left>li.active>a,
+.tabs-left>li.active>a:hover,
+.tabs-left>li.active>a:focus {
+  border-bottom-color: #ddd;
+  border-right-color: transparent;
+  background:#f90;
+  border:none;
+  border-radius:0px;
+  margin:0px;
+}
+.nav-tabs>li>a:hover {
+    /* margin-right: 2px; */
+    line-height: 1.42857143;
+    border: 1px solid transparent;
+    /* border-radius: 4px 4px 0 0; */
+}
+.tabs-left>li.active>a::after{content: "";
+    position: absolute;
+    top: 10px;
+    right: -10px;
+    border-top: 10px solid transparent;
+  border-bottom: 10px solid transparent;
+  
+  border-left: 10px solid #f90;
+    display: block;
+    width: 0;}
