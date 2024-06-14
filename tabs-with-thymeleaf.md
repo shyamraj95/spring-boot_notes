@@ -321,7 +321,182 @@ spring.h2.console.enabled=true
 *********************************************-------------------------------------***********************************************************
 
 
+#### `tab2.html` (with dynamic form rows including input and dropdown)
 
+```html
+<!-- src/main/resources/templates/fragments/tab2.html -->
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<div th:fragment="tab2">
+    <form th:action="@{/tabs/save}" method="post" id="tab2Form">
+        <input type="hidden" name="tabId" value="2">
+        <input type="hidden" name="appId" th:value="${appId}">
+        <div id="dynamic-form-rows">
+            <div class="form-row">
+                <div class="form-group col-md-4">
+                    <label for="inputData">Input Data</label>
+                    <input type="text" class="form-control" name="inputData[]" placeholder="Enter data">
+                </div>
+                <div class="form-group col-md-4">
+                    <label for="dropdownData">Dropdown Data</label>
+                    <select class="form-control" name="dropdownData[]">
+                        <option value="Option1">Option 1</option>
+                        <option value="Option2">Option 2</option>
+                        <option value="Option3">Option 3</option>
+                    </select>
+                </div>
+                <div class="form-group col-md-2">
+                    <label>&nbsp;</label>
+                    <button type="button" class="btn btn-success btn-block" onclick="addFormRow()">+</button>
+                </div>
+                <div class="form-group col-md-2">
+                    <label>&nbsp;</label>
+                    <button type="button" class="btn btn-danger btn-block" onclick="removeFormRow(this)">-</button>
+                </div>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Save to Draft</button>
+        <button type="button" class="btn btn-secondary" onclick="nextTab(3)">Next</button>
+    </form>
+</div>
+
+<script>
+    function addFormRow() {
+        let formRow = `
+            <div class="form-row">
+                <div class="form-group col-md-4">
+                    <input type="text" class="form-control" name="inputData[]" placeholder="Enter data">
+                </div>
+                <div class="form-group col-md-4">
+                    <select class="form-control" name="dropdownData[]">
+                        <option value="Option1">Option 1</option>
+                        <option value="Option2">Option 2</option>
+                        <option value="Option3">Option 3</option>
+                    </select>
+                </div>
+                <div class="form-group col-md-2">
+                    <button type="button" class="btn btn-success btn-block" onclick="addFormRow()">+</button>
+                </div>
+                <div class="form-group col-md-2">
+                    <button type="button" class="btn btn-danger btn-block" onclick="removeFormRow(this)">-</button>
+                </div>
+            </div>`;
+        $('#dynamic-form-rows').append(formRow);
+    }
+
+    function removeFormRow(button) {
+        $(button).closest('.form-row').remove();
+    }
+</script>
+</html>
+```
+
+### Step 2: Update the Controller
+
+Update the controller to handle lists of input and dropdown data for tab 2.
+
+```java
+// src/main/java/com/example/demo/controller/TabController.java
+package com.example.demo.controller;
+
+import com.example.demo.model.TabData;
+import com.example.demo.repository.TabDataRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Controller;
+import org.springframework.ui.Model;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+import java.util.Optional;
+
+@Controller
+@RequestMapping("/tabs")
+public class TabController {
+
+    @Autowired
+    private TabDataRepository tabDataRepository;
+
+    @GetMapping
+    public String getTabs(@RequestParam(required = false) Integer tabId, @RequestParam(required = false) String appId, Model model) {
+        model.addAttribute("tabId", tabId);
+        model.addAttribute("appId", appId);
+
+        if (tabId != null && appId != null) {
+            Optional<TabData> optionalTabData = tabDataRepository.findByTabIdAndAppId(tabId, appId);
+            optionalTabData.ifPresent(tabData -> model.addAttribute("formData", tabData.getFormData()));
+        }
+
+        return "tabs";
+    }
+
+    @PostMapping("/save")
+    public String saveTabData(@RequestParam int tabId, @RequestParam String appId, 
+                              @RequestParam List<String> inputData, @RequestParam List<String> dropdownData) {
+        Optional<TabData> optionalTabData = tabDataRepository.findByTabIdAndAppId(tabId, appId);
+        TabData tabData;
+        if (optionalTabData.isPresent()) {
+            tabData = optionalTabData.get();
+        } else {
+            tabData = new TabData();
+            tabData.setTabId(tabId);
+            tabData.setAppId(appId);
+        }
+        StringBuilder formData = new StringBuilder();
+        for (int i = 0; i < inputData.size(); i++) {
+            formData.append(inputData.get(i)).append(":").append(dropdownData.get(i)).append(";");
+        }
+        tabData.setFormData(formData.toString());
+        tabDataRepository.save(tabData);
+        return "redirect:/tabs?tabId=" + tabId + "&appId=" + appId;
+    }
+}
+```
+
+### Step 3: Main Template for Vertical Tabs
+
+Modify `tabs.html` to include Thymeleaf fragments for each tab.
+
+```html
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <title>Tabs Example</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css">
+    <script src="https://code.jquery.com/jquery-3.3.1.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <div class="row">
+            <div class="col-3">
+                <div class="nav flex-column nav-pills" id="v-pills-tab" role="tablist" aria-orientation="vertical">
+                    <a class="nav-link" th:classappend="${tabId == 1} ? 'active'" id="v-pills-tab1-tab" href="#v-pills-tab1" role="tab">Tab 1</a>
+                    <a class="nav-link" th:classappend="${tabId == 2} ? 'active'" id="v-pills-tab2-tab" href="#v-pills-tab2" role="tab">Tab 2</a>
+                    <a class="nav-link" th:classappend="${tabId == 3} ? 'active'" id="v-pills-tab3-tab" href="#v-pills-tab3" role="tab">Tab 3</a>
+                </div>
+            </div>
+            <div class="col-9">
+                <div class="tab-content" id="v-pills-tabContent">
+                    <div class="tab-pane fade" th:classappend="${tabId == 1} ? 'show active'" id="v-pills-tab1" role="tabpanel" th:replace="fragments/tab1 :: tab1"></div>
+                    <div class="tab-pane fade" th:classappend="${tabId == 2} ? 'show active'" id="v-pills-tab2" role="tabpanel" th:replace="fragments/tab2 :: tab2"></div>
+                    <div class="tab-pane fade" th:classappend="${tabId == 3} ? 'show active'" id="v-pills-tab3" role="tabpanel" th:replace="fragments/tab3 :: tab3"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+        function nextTab(tabId) {
+            const urlParams = new URLSearchParams(window.location.search);
+            const appId = urlParams.get('appId');
+            window.location.href = `/tabs?tabId=${tabId}&appId=${appId}`;
+        }
+    </script>
+</body>
+</html>
+```
+
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
  <div  class="col-sm-6">
         <h3>Left Tabs</h3>
@@ -388,3 +563,5 @@ spring.h2.console.enabled=true
   border-left: 10px solid #f90;
     display: block;
     width: 0;}
+https://www.tutorialrepublic.com/codelab.php?topic=bootstrap&file=table-with-add-and-delete-row-feature
+https://stackoverflow.com/questions/34057947/adding-row-on-click-in-bootstrap-form
