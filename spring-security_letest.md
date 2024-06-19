@@ -1328,3 +1328,756 @@ Certainly! Configuring environment variables to store sensitive information such
 
 By following these steps, you ensure that your RSA keys are securely stored and used within your Spring Boot application.
 
+
+////////////////////////////////////////////============================================================////////////////////////////////////////////////////////
+
+
+security configuration using Spring Security, JWT, IP validation, CSRF protection, and AES encryption for requests and responses.
+
+### Complete Implementation
+
+#### 1. SecurityConfig Class
+
+```java
+// Import necessary packages
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.builders.WebSecurity;
+import org.springframework.security.config.annotation.web.configuration.WebSecurityConfigurerAdapter;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+
+@Configuration
+public class SecurityConfig extends WebSecurityConfigurerAdapter {
+
+    // Bean to provide PasswordEncoder for secure password storage
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+
+    // Configure HTTP security settings
+    @Override
+    protected void configure(HttpSecurity http) throws Exception {
+        http
+            // Enable CSRF protection with cookie repository
+            .csrf().csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse()).and()
+            // Enable CORS with default settings
+            .cors().and()
+            // Ensure sessions are stateless
+            .sessionManagement().sessionCreationPolicy(SessionCreationPolicy.STATELESS).and()
+            // Add Encryption filter before all other filters
+            .addFilterBefore(new EncryptionFilter(), UsernamePasswordAuthenticationFilter.class)
+            // Add JWT filter before UsernamePasswordAuthenticationFilter
+            .addFilterBefore(jwtTokenFilter(), UsernamePasswordAuthenticationFilter.class)
+            // Define URL access rules
+            .authorizeRequests()
+                // Allow public access to the registration and login endpoints
+                .antMatchers("/api/auth/register", "/api/auth/login", "/api/auth/reset-password").permitAll()
+                // Any other request must be authenticated
+                .anyRequest().authenticated();
+    }
+
+    // Allow ignoring of static resources from security
+    @Override
+    public void configure(WebSecurity web) {
+        web.ignoring().antMatchers("/resources/**");
+    }
+
+    // Define JwtTokenFilter bean
+    @Bean
+    public JwtTokenFilter jwtTokenFilter() {
+        return new JwtTokenFilter(jwtTokenProvider(), userSessionService());
+    }
+
+    // Define JwtTokenProvider bean
+    @Bean
+    public JwtTokenProvider jwtTokenProvider() {
+        return new JwtTokenProvider();
+    }
+
+    // Define UserSessionService bean
+    @Bean
+    public UserSessionService userSessionService() {
+        return new UserSessionService();
+    }
+}
+```
+
+#### 2. JwtTokenProvider Class
+
+```java
+// Import necessary packages
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.SignatureAlgorithm;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+import javax.annotation.PostConstruct;
+import javax.servlet.http.HttpServletRequest;
+import java.util.Base64;
+import java.util.Date;
+import java.util.List;
+
+@Component
+public class JwtTokenProvider {
+
+    // Secret key for signing JWT
+    @Value("${security.jwt.token.secret-key:secret}")
+    private String secretKey;
+
+    // JWT token validity duration (in milliseconds)
+    @Value("${security.jwt.token.expire-length:3600000}")
+    private long validityInMilliseconds;
+
+    // Initialize the secret key
+    @PostConstruct
+    protected void init() {
+        // Encode the secret key using Base64
+        secretKey = Base64.getEncoder().encodeToString(secretKey.getBytes());
+    }
+
+    // Create a JWT token for the given username and roles
+    public String createToken(String username, List<String> roles) {
+        // Set claims for the token
+        Claims claims = Jwts.claims().setSubject(username);
+        claims.put("roles", roles);
+
+        // Set the validity duration for the token
+        Date now = new Date();
+        Date validity = new Date(now.getTime() + validityInMilliseconds);
+
+        // Build and sign the JWT token
+        return Jwts.builder()
+                .setClaims(claims)
+                .setIssuedAt(now)
+                .setExpiration(validity)
+                .signWith(SignatureAlgorithm.HS256, secretKey)
+                .compact();
+    }
+
+    // Get the username from the token
+    public String getUsername(String token) {
+        return Jwts.parser().setSigningKey(secretKey).parseClaimsJws(token).getBody().getSubject();
+    }
+
+    // Get the roles from the token
+    public List<String> getRoles(String token) {
+        return (List<String>) Jwts.parser().setSigningKey(secretKey).parseClaimsJws(token).getBody().get("roles");
+    }
+
+    // Validate the token's expiration
+    public boolean validateToken(String token) {
+        Claims claims = Jwts.parser().setSigningKey(secretKey).parseClaimsJws(token).getBody();
+        return !claims.getExpiration().before(new Date());
+    }
+
+    // Resolve token from the request header
+    public String resolveToken(HttpServletRequest req) {
+        String bearerToken = req.getHeader("Authorization");
+        if (bearerToken != null && bearerToken.startsWith("Bearer ")) {
+            return bearerToken.substring(7);
+        }
+        return null;
+    }
+}
+```
+
+#### 3. JwtTokenFilter Class
+
+```java
+// Import necessary packages
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+
+import javax.servlet.FilterChain;
+import javax.servlet.ServletException;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import java.io.IOException;
+
+public class JwtTokenFilter extends UsernamePasswordAuthenticationFilter {
+
+    private JwtTokenProvider jwtTokenProvider;
+    private UserSessionService userSessionService;
+
+    // Constructor injection of JwtTokenProvider and UserSessionService
+    public JwtTokenFilter(JwtTokenProvider jwtTokenProvider, UserSessionService userSessionService) {
+        this.jwtTokenProvider = jwtTokenProvider;
+        this.userSessionService = userSessionService;
+    }
+
+    // Override the doFilterInternal method to add JWT validation logic
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
+            throws ServletException, IOException {
+
+        // Extract the JWT token from the request
+        String token = jwtTokenProvider.resolveToken(request);
+
+        try {
+            if (token != null && jwtTokenProvider.validateToken(token)) {
+                // Get user details from token
+                String username = jwtTokenProvider.getUsername(token);
+                UserDetails userDetails = // Load user details from the database or another source
+
+                // Validate the client's IP address
+                String requestIp = request.getRemoteAddr();
+                UserSession userSession = userSessionService.getSessionByUsername(username);
+                if (userSession == null || !userSession.getIpAddress().equals(requestIp)) {
+                    response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "IP address mismatch");
+                    return;
+                }
+
+                // Create authentication object
+                UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
+                        userDetails, null, userDetails.getAuthorities());
+                auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+
+                // Set the authentication in the context
+                SecurityContextHolder.getContext().setAuthentication(auth);
+            }
+        } catch (Exception e) {
+            SecurityContextHolder.clearContext();
+            response.sendError(HttpServletResponse.SC_UNAUTHORIZED, e.getMessage());
+            return;
+        }
+
+        // Continue the filter chain
+        filterChain.doFilter(request, response);
+    }
+}
+```
+
+#### 4. Role-based Authorization Using `@PreAuthorize` Annotations
+
+```java
+// Import necessary packages
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class SampleController {
+
+    // An example endpoint restricted to users with ADMIN role
+    @PreAuthorize("hasRole('ROLE_ADMIN')")
+    @GetMapping("/admin")
+    public String adminAccess() {
+        return "Admin content";
+    }
+
+    // An example endpoint restricted to users with USER role
+    @PreAuthorize("hasRole('ROLE_USER')")
+    @GetMapping("/user")
+    public String userAccess() {
+        return "User content";
+    }
+}
+```
+
+#### 5. User Registration and Secure Password Storage
+
+```java
+// Import necessary packages
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/auth")
+public class AuthController {
+
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    // Endpoint for user registration
+    @PostMapping("/register")
+    public String registerUser(@RequestBody User user) {
+        // Encode the user's password before saving
+        user.setPassword(passwordEncoder.encode(user.getPassword()));
+        userRepository.save(user);
+        return "User registered successfully";
+    }
+}
+```
+
+#### 6. Temporary Password Generation and Expiration
+
+```java
+// Import necessary packages
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.mail.javamail.MimeMessageHelper;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.web.bind.annotation.*;
+
+import javax.mail.MessagingException;
+import javax.mail.internet.MimeMessage;
+import java.util.Date;
+import java.util.UUID;
+
+@RestController
+@RequestMapping("/api/auth")
+public class AuthController {
+
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    @
+
+Autowired
+    private JavaMailSender mailSender;
+
+    // Endpoint to handle password reset request
+    @PostMapping("/reset-password")
+    public String resetPassword(@RequestParam String email) throws MessagingException {
+        // Generate temporary password
+        String tempPassword = UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+
+        // Find user by email
+        User user = userRepository.findByEmail(email);
+        if (user == null) {
+            return "User not found";
+        }
+
+        // Encode and set temporary password
+        user.setPassword(passwordEncoder.encode(tempPassword));
+        user.setPasswordExpiryDate(new Date(System.currentTimeMillis() + 3600000)); // 1 hour expiry
+        userRepository.save(user);
+
+        // Send temporary password via email
+        MimeMessage message = mailSender.createMimeMessage();
+        MimeMessageHelper helper = new MimeMessageHelper(message, true);
+        helper.setTo(email);
+        helper.setSubject("Password Reset");
+        helper.setText("Your temporary password is: " + tempPassword);
+
+        mailSender.send(message);
+
+        return "Temporary password sent to your email";
+    }
+}
+```
+
+#### 7. User Login Endpoint and Store Client IP in Session Data
+
+```java
+// Import necessary packages
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.AuthenticationException;
+import org.springframework.web.bind.annotation.*;
+
+import javax.servlet.http.HttpServletRequest;
+
+@RestController
+@RequestMapping("/api/auth")
+public class AuthController {
+
+    @Autowired
+    private AuthenticationManager authenticationManager;
+
+    @Autowired
+    private JwtTokenProvider jwtTokenProvider;
+
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
+    private UserSessionService userSessionService;
+
+    // Endpoint for user login
+    @PostMapping("/login")
+    public String login(@RequestBody AuthRequest request, HttpServletRequest httpRequest) {
+        try {
+            // Authenticate user
+            Authentication authentication = authenticationManager.authenticate(
+                    new UsernamePasswordAuthenticationToken(request.getUsername(), request.getPassword()));
+
+            // Get the authenticated user
+            User user = (User) authentication.getPrincipal();
+
+            // Store the user's IP in the session data
+            String clientIp = httpRequest.getRemoteAddr();
+            userSessionService.createSession(user.getUsername(), clientIp);
+
+            // Create JWT token
+            String token = jwtTokenProvider.createToken(user.getUsername(), user.getRoles());
+
+            return "Bearer " + token;
+        } catch (AuthenticationException e) {
+            return "Invalid username/password";
+        }
+    }
+}
+```
+
+#### 8. Password Reset Functionality
+
+This part remains the same as in Step 6.
+
+#### 9. Refresh JWT Token Generation and Validation for Session Management
+
+```java
+// Import necessary packages
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.*;
+
+import javax.servlet.http.HttpServletRequest;
+
+@RestController
+@RequestMapping("/api/auth")
+public class AuthController {
+
+    @Autowired
+    private JwtTokenProvider jwtTokenProvider;
+
+    @Autowired
+    private UserSessionService userSessionService;
+
+    @PostMapping("/refresh-token")
+    public String refreshToken(@RequestHeader("Authorization") String oldToken, HttpServletRequest httpRequest) {
+        // Validate the old token and get user details
+        if (jwtTokenProvider.validateToken(oldToken)) {
+            String username = jwtTokenProvider.getUsername(oldToken);
+            UserSession userSession = userSessionService.getSessionByUsername(username);
+            if (userSession != null && userSession.getIpAddress().equals(httpRequest.getRemoteAddr())) {
+                List<String> roles = jwtTokenProvider.getRoles(oldToken);
+                // Generate a new token
+                String newToken = jwtTokenProvider.createToken(username, roles);
+                return "Bearer " + newToken;
+            }
+        }
+        return "Invalid or expired token";
+    }
+}
+```
+
+#### 10. Store User Details, Roles, User Sessions, and Client IP Addresses in the Database
+
+```java
+// User entity
+import javax.persistence.*;
+import java.util.Date;
+import java.util.List;
+
+@Entity
+public class User {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    private String username;
+    private String email;
+    private String password;
+    private Date passwordExpiryDate;
+
+    @ManyToMany(fetch = FetchType.EAGER)
+    private List<Role> roles;
+
+    // getters and setters
+}
+
+// Role entity
+@Entity
+public class Role {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    private String name;
+
+    // getters and setters
+}
+
+// UserSession entity
+@Entity
+public class UserSession {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    private String username;
+    private String ipAddress;
+    private Date loginDate;
+
+    // getters and setters
+}
+
+// User repository
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface UserRepository extends JpaRepository<User, Long> {
+    User findByEmail(String email);
+    User findByUsername(String username);
+}
+
+// User session repository
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface UserSessionRepository extends JpaRepository<UserSession, Long> {
+    UserSession findByUsername(String username);
+}
+
+// Role repository
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface RoleRepository extends JpaRepository<Role, Long> {
+    Role findByName(String name);
+}
+
+// UserSessionService class
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+@Service
+public class UserSessionService {
+
+    @Autowired
+    private UserSessionRepository userSessionRepository;
+
+    public void createSession(String username, String ipAddress) {
+        UserSession session = new UserSession();
+        session.setUsername(username);
+        session.setIpAddress(ipAddress);
+        session.setLoginDate(new Date());
+        userSessionRepository.save(session);
+    }
+
+    public UserSession getSessionByUsername(String username) {
+        return userSessionRepository.findByUsername(username);
+    }
+}
+```
+
+#### 11. AES Encryption Utility
+
+```java
+// Import necessary packages
+import javax.crypto.Cipher;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.SecretKeySpec;
+import java.util.Base64;
+
+public class AesEncryptionUtil {
+
+    // Generate a new AES key
+    public static String generateKey() throws Exception {
+        KeyGenerator keyGen = KeyGenerator.getInstance("AES");
+        keyGen.init(256);
+        SecretKey secretKey = keyGen.generateKey();
+        return Base64.getEncoder().encodeToString(secretKey.getEncoded());
+    }
+
+    // Encrypt a message using AES
+    public static String encrypt(String message, String secret) throws Exception {
+        SecretKeySpec key = new SecretKeySpec(Base64.getDecoder().decode(secret), "AES");
+        Cipher cipher = Cipher.getInstance("AES");
+        cipher.init(Cipher.ENCRYPT_MODE, key);
+        byte[] encrypted = cipher.doFinal(message.getBytes());
+        return Base64.getEncoder().encodeToString(encrypted);
+    }
+
+    // Decrypt a message using AES
+    public static String decrypt(String encryptedMessage, String secret) throws Exception {
+        SecretKeySpec key = new SecretKeySpec(Base64.getDecoder().decode(secret), "AES");
+        Cipher cipher = Cipher.getInstance("AES");
+        cipher.init(Cipher.DECRYPT_MODE, key);
+        byte[] decrypted = cipher.doFinal(Base64.getDecoder().decode(encryptedMessage));
+        return new String(decrypted);
+    }
+}
+```
+
+#### 12. Encryption Filter
+
+```java
+// Import necessary packages
+import javax.servlet.Filter;
+import javax.servlet.FilterChain;
+import javax.servlet.FilterConfig;
+import javax.servlet.ServletException;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.Base64;
+
+public class EncryptionFilter implements Filter {
+
+    private static final String AES_KEY = "your-256-bit-base64-encoded-key"; // Replace with your actual key
+
+    @Override
+    public void init(FilterConfig filterConfig) throws ServletException {}
+
+    @Override
+    public void doFilter(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+            throws IOException, ServletException {
+        // Wrap request and response to handle encryption/decryption
+        EncryptedRequestWrapper encryptedRequest = new EncryptedRequestWrapper(request);
+        EncryptedResponseWrapper encryptedResponse = new EncryptedResponseWrapper(response);
+
+        chain.doFilter(encryptedRequest, encryptedResponse);
+
+        // Encrypt response
+        String responseContent = encryptedResponse.getCaptureAsString();
+        String encryptedResponseContent;
+        try {
+            encryptedResponseContent = AesEncryptionUtil.encrypt(responseContent, AES_KEY);
+        } catch (Exception e) {
+            throw new ServletException("Encryption error", e);
+        }
+
+        // Write encrypted response
+        response.setContentLength(encryptedResponseContent.length());
+        response.getWriter().write(encryptedResponseContent);
+    }
+
+    @Override
+    public void destroy() {}
+
+    private static class EncryptedRequestWrapper extends HttpServletRequestWrapper {
+        private final byte[] body;
+
+        public EncryptedRequestWrapper(HttpServletRequest request) throws IOException {
+            super(request);
+            body = toByteArray(request.getInputStream());
+        }
+
+        @Override
+        public ServletInputStream getInputStream() {
+            ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(body);
+            return new ServletInputStream() {
+                @Override
+                public int read() {
+                    return byteArrayInputStream.read();
+                }
+            };
+        }
+
+        public String getBody() {
+            return new String(body);
+        }
+
+        private byte[] toByteArray(InputStream input) throws IOException {
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            byte[] buffer = new byte
+
+[1024];
+            int n;
+            while ((n = input.read(buffer)) != -1) {
+                output.write(buffer, 0, n);
+            }
+            return output.toByteArray();
+        }
+    }
+
+    private static class EncryptedResponseWrapper extends HttpServletResponseWrapper {
+        private final ByteArrayOutputStream capture;
+        private ServletOutputStream output;
+        private PrintWriter writer;
+
+        public EncryptedResponseWrapper(HttpServletResponse response) {
+            super(response);
+            capture = new ByteArrayOutputStream(response.getBufferSize());
+        }
+
+        @Override
+        public ServletOutputStream getOutputStream() throws IOException {
+            if (writer != null) {
+                throw new IllegalStateException("getWriter() has already been called on this response.");
+            }
+
+            if (output == null) {
+                output = new ServletOutputStream() {
+                    @Override
+                    public void write(int b) throws IOException {
+                        capture.write(b);
+                    }
+                };
+            }
+            return output;
+        }
+
+        @Override
+        public PrintWriter getWriter() throws IOException {
+            if (output != null) {
+                throw new IllegalStateException("getOutputStream() has already been called on this response.");
+            }
+
+            if (writer == null) {
+                writer = new PrintWriter(new OutputStreamWriter(capture, getCharacterEncoding()));
+            }
+            return writer;
+        }
+
+        public String getCaptureAsString() throws IOException {
+            if (writer != null) {
+                writer.close();
+            } else if (output != null) {
+                output.close();
+            }
+            return capture.toString(getCharacterEncoding());
+        }
+    }
+}
+```
+
+#### 13. Unit and Integration Tests
+
+```java
+// Import necessary packages
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.security.crypto.password.PasswordEncoder;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+@SpringBootTest
+public class AuthServiceTests {
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    @Test
+    public void testPasswordEncoder() {
+        String rawPassword = "password";
+        String encodedPassword = passwordEncoder.encode(rawPassword);
+        assertThat(passwordEncoder.matches(rawPassword, encodedPassword)).isTrue();
+    }
+
+    // More tests can be written similarly for other functionalities
+}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
